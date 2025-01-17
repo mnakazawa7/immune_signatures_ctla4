@@ -1,0 +1,350 @@
+---
+title: "CYTOF Marker Analysis, final CIR resubmission"
+author: "Mari Nakazawa"
+date: "2024-01-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Dependencies
+
+```{r dependencies}
+library(tidyverse)
+library(RColorBrewer)
+library(GGally)
+library(patchwork)
+library(pheatmap)
+library(ComplexHeatmap)
+library(viridis)
+library(ggpubr)
+library(MKinfer)
+library(broom)
+```
+
+## Clinical data
+
+```{r, echo = FALSE}
+clinical_cohort <- read_csv("../Data/patients_list_final.csv") %>% 
+        select(-`...1`)
+```
+
+## Marker expression merged with clinical data
+
+```{r marker expression, echo = FALSE}
+markers <- read_csv("../Data/cytof_markers_final.csv")
+
+markers_paired <- markers %>% 
+        group_by(patient) %>%
+        filter(
+    # Ensure each patient has at least one baseline and one on-treatment specimen
+                any(timepoint == 0) & any(timepoint %in% c(1, 2))) %>%
+        mutate(
+    # Determine the earliest on-treatment timepoint for each patient
+                EarliestOnTreatment = min(timepoint[timepoint %in% c(1, 2)])) %>%
+        filter(
+    # Keep rows for baseline (0) and the earliest on-treatment timepoint
+                timepoint == 0 | timepoint == EarliestOnTreatment) %>%
+        ungroup() %>%
+        select(-EarliestOnTreatment) %>%
+        mutate(timepoint = recode(timepoint, "0" = "Baseline", "1" = "On Treatment", "2" = "On Treatment")) %>% 
+        left_join(clinical_cohort)
+```
+
+## Marker data
+
+```{r}
+marker_types <- data.frame(Marker = c("CD25", "OX40", "CD28", "CD137", "CCR7", "CD45RA", "CD45RO", "GZMB", "KI67", "TBET", "CTLA4", "LAG3", "PD1", "PDL1", "TIGIT", "TIM3"), Function = c("Activation", "Activation", "Activation", "Activation", "Effector Memory", "Effector Memory", "Effector Memory", "Effector Function/Proliferation", "Effector Function/Proliferation", "Effector Function/Proliferation", "Exhaustion", "Exhaustion", "Exhaustion", "Exhaustion", "Exhaustion", "Exhaustion"))
+
+markers_long <- markers_paired %>% 
+        filter(variable %in% marker_types$Marker) %>%
+        left_join(marker_types, by = c("variable" = "Marker")) %>% 
+        select(patient, timepoint, cluster, variable, Function, value, anti_ctla4, responder) %>% 
+        pivot_wider(names_from = timepoint, values_from = value) %>% 
+        mutate(log_fc = log2((`On Treatment` + 1e-5)/(Baseline + 1e-5))) 
+
+length(unique(markers_long$patient)) #88
+```
+
+## Marker expression by cell type (in MMI)
+
+```{r}
+ggplot(markers, aes(x = cluster, y = value)) +
+        geom_violin() +
+        facet_wrap(~ variable, scales = "free") +
+        theme_classic() +
+        labs(y = "MMI", x = "Cluster") +
+        theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+## Heatmap (logfc) preparation (regimen status)
+
+```{r}
+#By cell type
+heatmap_data <- markers_long %>% 
+        group_by(anti_ctla4, cluster, variable) %>% 
+        summarize(average_logfc = mean(log_fc, na.rm = TRUE)) %>% 
+        ungroup() 
+
+wide_heatmap <- heatmap_data %>% 
+        pivot_wider(names_from = variable, values_from = average_logfc)
+
+scaled_fc <- wide_heatmap %>% 
+        select(-cluster, -anti_ctla4) %>% 
+        scale() 
+
+col_annotations <- wide_heatmap %>% 
+        select(anti_ctla4, cluster)
+
+row_annotations <- marker_types %>% 
+        column_to_rownames(var = "Marker")
+
+col_annotations$cluster <- as.factor(col_annotations$cluster)
+col_annotations$anti_ctla4 <- factor(col_annotations$anti_ctla4, levels = c(FALSE, TRUE), labels = c("Single ICI", "Combination ICI"))
+row_annotations$Function <- factor(row_annotations$Function, levels = c("Activation", "Effector Memory", "Effector Function/Proliferation", "Exhaustion"))
+```
+
+## Heatmap using ComplexHeatmap (prep)
+
+```{r}
+# Row annotations
+cell_function <- unique(row_annotations$Function)
+colors_row <- brewer.pal(n = length(cell_function), name = "YlOrRd")
+
+# Create a named vector for the colors
+row_colors <- setNames(colors_row, cell_function)
+
+row_anno <- rowAnnotation(
+        MarkerFunction = row_annotations$Function,
+        col = list(MarkerFunction = row_colors))
+
+# Col annotations
+cells <- markers %>% 
+        select(cluster) %>% 
+        unique() %>% 
+        mutate(type = c("B", "B", "DNT", "DNT", "Myeloid", "NK", "NK", "CD8", "CD8", "CD8", "CD8", "CD8", "CD4", "CD4", "CD4", "CD4", "CD4", "CD4", "CD4"))
+
+order <- c("CD25", "OX40", "CD28", "CD137", "CCR7", "CD45RA", "CD45RO", "GZMB", "KI67", "TBET", "CTLA4", "LAG3", "PD1", "PDL1", "TIGIT", "TIM3")
+
+cell_type <- unique(cells$type)
+colors_col <- brewer.pal(n = length(cell_type), name = "Set1")
+
+# Create a named vector for the colors
+col_colors <- setNames(colors_col, cell_type)
+
+col_anno2 <- HeatmapAnnotation(
+        ImmuneCellType = cells$type,
+        col = list(ImmuneCellType = col_colors))
+
+col_anno3 <- HeatmapAnnotation(
+        MarkerFunction = row_annotations$Function,
+        col = list(MarkerFunction = row_colors))
+```
+
+## Main heatmap
+
+```{r}
+#Split into 2 heatmaps
+
+fc_split <- cbind(col_annotations, scaled_fc) 
+
+fc_split <- fc_split %>%
+        split(fc_split$anti_ctla4)
+
+df_combo <- fc_split[["Combination ICI"]]
+rownames(df_combo) <- df_combo$cluster
+df_combo_matrix <- df_combo %>% 
+        select(-cluster, -anti_ctla4) %>% 
+        t() %>% 
+        .[order, ]
+
+df_single <- fc_split[["Single ICI"]]
+rownames(df_single) <- df_single$cluster
+df_single_matrix <- df_single %>% 
+        select(-cluster, -anti_ctla4) %>% 
+        t() %>% 
+        .[order, ]
+
+set.seed(123)
+
+ht_df_single <- Heatmap(df_single_matrix, name = "LogFC marker expression", column_title = "Single ICI", top_annotation = col_anno2, right_annotation = row_anno, cluster_rows = FALSE, cluster_columns = FALSE, heatmap_legend_param = list(legend_direction = "horizontal", legend_position = "bottom"))
+
+draw(ht_df_single, heatmap_legend_side = "bottom")
+
+ht_df_combo <- Heatmap(df_combo_matrix, name = "LogFC marker expression", column_title = "Combination ICI", top_annotation = col_anno2, right_annotation = row_anno, cluster_rows = FALSE, cluster_columns = FALSE)
+
+ht_df_single + ht_df_combo 
+```
+
+## Function to generate functional marker matrix by cell type
+
+```{r}
+#By cell type
+
+order <- c("CD25", "OX40", "CD28", "CD137", "CCR7", "CD45RA", "CD45RO", "GZMB", "KI67", "TBET", "CTLA4", "LAG3", "PD1", "PDL1", "TIGIT", "TIM3")
+
+create_matrix <- function(input_df, cell_cluster) {
+        
+        d_cell <- input_df %>% 
+                filter(cluster == cell_cluster, !is.na(log_fc))
+        
+        scaled_log_fc <- scale(d_cell$log_fc)
+        d_cell <- cbind(d_cell, scaled_log_fc)
+        
+        matrix_scaled <- d_cell %>% 
+                group_by(anti_ctla4, variable) %>%
+                summarize(average_logfc = mean(log_fc), .groups = "drop") %>%
+                pivot_wider(names_from = variable, values_from = average_logfc) %>%
+                select(-anti_ctla4) %>%
+                as.data.frame() %>% 
+                select(all_of(order)) %>% #reordered
+                as.matrix()
+        
+        rownames(matrix_scaled) <- c("Single ICI", "Combination ICI")
+        
+        return(matrix_scaled)
+}
+
+th17_matrix <- create_matrix(markers_long, "Th17")
+treg_matrix <- create_matrix(markers_long, "Treg")
+```
+
+## Marker expression in Th17 subset
+
+```{r}
+# Mixed effects linear model
+library(lme4)
+library(emmeans)
+
+# Mixed-effects model
+th17_long <- markers_paired %>% 
+        filter(cluster == "Th17")
+
+model_th17 <- lmer(value ~ timepoint * anti_ctla4 * variable + (1 | patient), data = th17_long)
+summary(model_th17)
+
+# Get estimated marginal means (EMMs)
+emms_th17 <- emmeans(model_th17, ~ timepoint * anti_ctla4 | variable)
+
+# Perform pairwise comparisons of the change in immune cell marker expression by single and combination ICI therapy
+pairwise_results_th17 <- contrast(emms_th17, interaction = "pairwise", by = "variable")
+
+# View the results
+summary(pairwise_results_th17) 
+
+# Test the difference between baseline and on treatment, for single and combination ICI therapy separately
+treatment_diff_th17 <- emmeans(model_th17, ~ timepoint | anti_ctla4 * variable)
+
+# Compare changes in expression between treatments
+comparison_results_th17 <- contrast(treatment_diff_th17, method = "revpairwise", interaction = TRUE)
+
+# View results
+summary(comparison_results_th17)
+comparison_df_th17 <- as.data.frame(summary(comparison_results_th17)) %>% 
+        mutate(
+                sig = case_when(
+                        p.value <= 0.001 ~ "***",
+                        p.value <= 0.01 ~ "**",
+                        p.value <= 0.05 ~ "*",
+                        TRUE ~ ""
+                )
+        )
+```
+
+## Annotated heatmap for Th17
+
+```{r}
+# Pivot to create a significance matrix
+significance_matrix_th17 <- comparison_df_th17 %>%
+        filter(timepoint_revpairwise == "On Treatment - Baseline") %>% # Focus on this comparison
+        select(variable, anti_ctla4, sig) %>%
+        pivot_wider(
+                names_from = variable,  # Immune markers become columns
+                values_from = sig,  # Significance levels populate the matrix
+                names_sort = TRUE
+        ) %>% 
+        select(all_of(order)) %>% 
+        as.matrix()
+
+# Set rownames to anti_ctla4 values
+rownames(significance_matrix_th17) <- c("Single ICI", "Combination ICI")
+
+th17_heatmap <- Heatmap(th17_matrix, name = "LogFC marker expression (MMI)", column_title = "Th17 Cell Subset", top_annotation = col_anno3, cell_fun = function(j, i, x, y, width, height, fill) {
+                grid.text(significance_matrix_th17[i, j], x, y, gp = gpar(fontsize = 15, col = "black"))},
+                row_labels = c("Single ICI", "Combination ICI"), cluster_rows = FALSE, cluster_columns = FALSE)
+
+th17_heatmap
+```
+
+## Marker expression in Treg subset
+
+```{r}
+# Mixed-effects model
+treg_long <- markers_paired %>% 
+        filter(cluster == "Treg")
+
+model_treg <- lmer(value ~ timepoint * anti_ctla4 * variable + (1 | patient), data = treg_long)
+summary(model_treg)
+
+# Get estimated marginal means (EMMs)
+emms_treg <- emmeans(model_treg, ~ timepoint * anti_ctla4 | variable)
+
+# Perform pairwise comparisons of the change in immune cell marker expression by single and combination ICI therapy
+pairwise_results_treg <- contrast(emms_treg, interaction = "pairwise", by = "variable")
+
+# View the results
+summary(pairwise_results_treg) 
+
+# Test the difference between baseline and on treatment, for single and combination ICI therapy separately
+treatment_diff_treg <- emmeans(model_treg, ~ timepoint | anti_ctla4 * variable)
+
+# Compare changes in expression between treatments
+comparison_results_treg <- contrast(treatment_diff_treg, method = "revpairwise", interaction = TRUE)
+
+# View results
+summary(comparison_results_treg)
+comparison_df_treg <- as.data.frame(summary(comparison_results_treg)) %>% 
+        mutate(
+                sig = case_when(
+                        p.value <= 0.001 ~ "***",
+                        p.value <= 0.01 ~ "**",
+                        p.value <= 0.05 ~ "*",
+                        TRUE ~ ""
+                )
+        )
+```
+
+## Annotated heatmap for Treg
+
+```{r}
+# Pivot to create a significance matrix
+significance_matrix_treg <- comparison_df_treg %>%
+        filter(timepoint_revpairwise == "On Treatment - Baseline") %>% # Focus on this comparison
+        select(variable, anti_ctla4, sig) %>%
+        pivot_wider(
+                names_from = variable,  # Immune markers become columns
+                values_from = sig,  # Significance levels populate the matrix
+                names_sort = TRUE
+        ) %>% 
+        select(all_of(order)) %>% 
+        as.matrix()
+
+# Set rownames to anti_ctla4 values
+rownames(significance_matrix_treg) <- c("Single ICI", "Combination ICI")
+
+treg_heatmap <- Heatmap(treg_matrix, name = "LogFC marker expression (MMI)", column_title = "Treg Cell Subset", top_annotation = col_anno3, cell_fun = function(j, i, x, y, width, height, fill) {
+                grid.text(significance_matrix_treg[i, j], x, y, gp = gpar(fontsize = 15, col = "black"))},
+                row_labels = c("Single ICI", "Combination ICI"), cluster_rows = FALSE, cluster_columns = FALSE)
+
+treg_heatmap
+```
+
+# Session info
+
+```{r}
+devtools::session_info()
+```
+
+This document was processed on: `r Sys.Date()`.

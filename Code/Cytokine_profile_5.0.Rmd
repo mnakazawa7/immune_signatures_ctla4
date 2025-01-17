@@ -1,0 +1,156 @@
+---
+title: "Cytokine profile, final CIR resubmission"
+author: "Mari Nakazawa"
+date: "2025-01-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Dependencies
+
+```{r}
+library(tidyverse)
+library(MKinfer)
+library(knitr)
+library(RColorBrewer)
+library(patchwork)
+library(ComplexHeatmap)
+library(ggpubr)
+library(writexl)
+```
+
+## Load clinical data
+
+```{r clinical data, echo = F}
+clinical_cohort <- read_csv("../Data/patients_list_final.csv") 
+```
+
+## Load cytokine data
+
+```{r}
+cytokines_clean <- read_csv("../Data/cytokines_final.csv") %>% 
+        left_join(clinical_cohort, by = "patient")
+
+cytokines_wide <- cytokines_clean %>% 
+        select(patient, `Age On Study`, Gender, timepoint, anti_ctla4, cancer_type, treatment_summary, msi_tmb_hi, cytokine, responder, log_concentration) %>% 
+        pivot_wider(names_from = timepoint, values_from = log_concentration, values_fn = list(log_concentration = mean)) %>% 
+        mutate(log_fc = `On Treatment`/Baseline) %>% 
+        filter(!is.na(log_fc))
+
+length(unique(cytokines_wide$patient)) #75 paired specimens
+```
+
+## Distributions by cytokine
+
+```{r}
+#Log-transformed and scaled data by cytokine
+ggplot(cytokines_clean, aes(x = log_concentration)) +
+        geom_histogram() +
+        theme_classic() +
+        scale_y_log10() +
+        facet_wrap(~cytokine, ncol = 6)
+```
+
+## Boxplot, fold change
+
+```{r}
+ggplot(cytokines_wide, aes(x = anti_ctla4, y = log_fc, color = anti_ctla4)) +
+        geom_boxplot(lwd = 1) +
+        geom_jitter() +
+        theme_classic() +
+        theme(legend.position = "none") +
+        scale_color_brewer(palette = "Dark2") +
+        scale_x_discrete(labels = c("Single ICI", "Combination ICI")) +
+        labs(x = "Regimen", y = "Log2 fold change cytokine concentration (pg/ml)") +
+        stat_compare_means(method = "wilcox.test", size = 4) +
+        facet_wrap(~cytokine, ncol = 8, scales = "free_y")
+```
+
+## Plot with facet wrap
+
+```{r}
+select_cells <- cytokines_wide %>% 
+        filter(cytokine %in% c("iTAC", "MIG", "IP-10")) %>% 
+        ggplot(aes(x = anti_ctla4, y = log_fc, color = anti_ctla4)) + 
+        geom_boxplot(lwd = 1) +
+        geom_jitter() +
+        theme_classic() +
+        theme(legend.position = "none") +
+        scale_color_brewer(palette = "Dark2") +
+        scale_x_discrete(labels = c("Single ICI", "Combination ICI")) +
+        labs(x = "Regimen", y = "Log2 fold change cytokine concentration (pg/mL)") +
+        stat_compare_means(method = "wilcox.test") +
+        facet_wrap(~cytokine, ncol = 3, scales = "free_y")
+
+select_cells
+```
+
+## Simple linear regression (on fold change)
+
+```{r simple linear regression, echo = FALSE}
+model_results <- list()
+model_betas <- vector()
+
+for(i in unique(cytokines_wide$cytokine)){
+        
+        d_cytokines <- cytokines_wide %>% 
+                filter(cytokine == i) %>% 
+                mutate(cancer_type = recode(cancer_type, "Head and Neck" = "Other", "Lung" = "Other", "Cutaneous" = "Other", "Endocrine" = "Other", "Sarcoma" = "Other", "Gyn" = "Other")) %>% 
+                mutate(prior_tx = ifelse(treatment_summary == "neither", FALSE, TRUE)) %>% 
+                mutate(msi = ifelse(msi_tmb_hi == TRUE, "High", "Low"))
+                
+        d_cytokines$Gender <- factor(d_cytokines$Gender, levels = c("Female", "Male"))
+        d_cytokines$cancer_type <- factor(d_cytokines$cancer_type, levels = c("GI", "GU", "Other"))
+        d_cytokines$msi <- factor(d_cytokines$msi, levels = c("Low", "High"))
+        d_cytokines$prior_tx <- factor(d_cytokines$prior_tx, levels = c(FALSE, TRUE))
+        d_cytokines$anti_ctla4 <- factor(d_cytokines$anti_ctla4, levels = c(FALSE, TRUE))
+        d_cytokines$responder <- factor(d_cytokines$responder, levels = c(FALSE, TRUE))
+        
+        linear_model <- lm(log_fc ~ `Age On Study` + Gender + cancer_type + anti_ctla4 + prior_tx + msi + responder, data = d_cytokines)
+        
+        model_results[[i]] = linear_model
+        
+        temp <- summary(model_results[[i]])
+        d_rows <- as.data.frame(temp$coefficients[2:9, ]) %>% 
+                mutate(cytokine = i) %>% 
+                mutate(variable = c("age", "gender_male", "cancer_gu", "cancer_other", "combo_ICI", "prior_tx", "mut", "responder"))
+        
+        
+        
+        model_betas <- rbind(model_betas, d_rows)
+        
+}
+
+linear_m <- as.data.frame(model_betas) %>% 
+        select(Estimate, `Pr(>|t|)`, cytokine, variable) %>% 
+        rename(beta = Estimate, nominal_p = `Pr(>|t|)`) %>% 
+        group_by(variable) %>% 
+        mutate(nominal_p = as.numeric(nominal_p), p_adjust = p.adjust(nominal_p, "BY")) %>% # Benjamini-Yekutieli correction since the hypotheses being tested are not independent
+        arrange(nominal_p) 
+
+head(linear_m, 15)
+```
+
+## Extract coefficients
+
+```{r}
+model_summary <- summary(model_results[["MIG"]]) #Insert cytokine here
+coefficients <- model_summary$coefficients
+results_df <- as.data.frame(coefficients)
+colnames(results_df) <- c("Estimate", "Std. Error", "t value", "p value")
+results_df <- results_df[, c("Estimate", "Std. Error", "p value")]
+
+results <- linear_m %>% 
+        filter(cytokine == "MIG")
+```
+
+# Session info
+
+```{r}
+devtools::session_info()
+```
+
+This document was processed on: `r Sys.Date()`.
