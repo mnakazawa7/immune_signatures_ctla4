@@ -1,0 +1,168 @@
+---
+title: "GSVA Analysis, final CIR resubmission"
+author: "Mari Nakazawa"
+date: "2025-01-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Dependencies
+
+```{r}
+library(tidyverse)
+library(RColorBrewer)
+library(GSVA)
+library(VIM)
+library(SummarizedExperiment)
+library(sechm)
+```
+
+## Creating "fold change" matrix
+
+```{r}
+cytokines_matrix <- read_csv("../Data/cytokines_wide_final.csv") %>% 
+        select(patient, cytokine, anti_ctla4, responder, log_fc) %>% 
+        pivot_wider(names_from = cytokine, values_from = log_fc)
+
+# Factors
+cytokines_matrix$anti_ctla4 <- factor(cytokines_matrix$anti_ctla4, levels = c(FALSE, TRUE))
+
+# Concentration matrix
+fc_conc_matrix <- cytokines_matrix %>% 
+        select(-anti_ctla4, -responder) %>% 
+        column_to_rownames(var = "patient") %>% 
+        t()
+
+# Number of NAs
+sum(is.na(fc_conc_matrix)) #21 (0.7% of total data)
+
+# Perform kNN imputation
+conc_matrix_imputed <- kNN(fc_conc_matrix, k = 3, imp_var = FALSE) %>%  # Adjust `k` as needed
+        as.matrix()
+
+rownames(conc_matrix_imputed) <- rownames(fc_conc_matrix)
+
+# Check dimensions
+dim(conc_matrix_imputed)
+
+# Inspect row and column names
+head(rownames(conc_matrix_imputed))  # Should return cytokine names
+head(colnames(conc_matrix_imputed))  # Should return patient/sample names
+```
+
+## Cytokine sets
+
+```{r}
+cytokine_sets_mod <- list(myeloid = c("G-CSF", "GM-CSF", "MCP-1", "MIP-1a", "MIP-1b", "MIP-3a", "MPIF-1"), 
+                      th1 = c("IFNg", "IL-2", "IL-12(p40)", "IL-12(p70)", "IL-18", "TNFa", "MIG", "IP-10", "iTAC"), 
+                      th17 = c("IL-6", "IL-17A", "IL-17F", "IL-21", "IL-22", "IL-23"), 
+                      th2 = c("IL-4", "IL-5", "IL-9", "IL-13"), 
+                      treg = c("IL-10", "IL-35"))
+
+names(cytokine_sets_mod)
+```
+
+## GSVA
+
+```{r}
+#Summarized Experiment
+sample_data_fc <- cytokines_matrix %>% 
+        select(patient, anti_ctla4, responder)
+
+fc_se <- SummarizedExperiment(assays = list(counts = conc_matrix_imputed),
+                     colData = sample_data_fc)
+
+#Expression matrix with logfc in cytokine concentration
+gsva_param_fc <- gsvaParam(fc_se, cytokine_sets_mod, kcdf = "Gaussian")
+gsva_results_fc <- gsva(gsva_param_fc)
+assays(gsva_results_fc, withDimnames = TRUE) <- setNames(assays(gsva_results_fc), "log fc") #rename assay
+
+# Explore the results
+
+# Inspect the structure of the gsva_results object
+str(gsva_results_fc)
+
+# Summarize the gsva_results object
+summary(gsva_results_fc)
+
+# Check the assay names
+assayNames(gsva_results_fc)
+
+# Check the column (sample) names
+colnames(gsva_results_fc)
+
+# Check the row (gene set) names
+rownames(gsva_results_fc)
+
+# Extract GSVA scores
+gsva_scores <- assay(gsva_results_fc, "log fc")
+
+# View the first few rows and columns of the GSVA scores
+head(gsva_scores)
+
+# View the sample metadata
+head(colData(gsva_results_fc))
+
+# View the feature metadata
+head(rowData(gsva_results_fc))
+```
+
+## Statistical analysis (T test)
+
+```{r}
+regimen_location <- gsva_results_fc@colData@listData$anti_ctla4 #where regimen status is stored in se object
+
+scores <- assay(gsva_results_fc)
+
+ttest_results <- apply(scores, 1, function(x) {
+        t.test(x ~ regimen_location)$p.value
+        })
+
+ttest_results_df <- data.frame(
+        CytokineSet = rownames(gsva_scores),
+        PValue = ttest_results)
+```
+
+## Plots
+
+```{r}
+cytokine_groups <- c("myeloid", "th1", "th17", "th2", "treg")
+
+# Update anti_ctla4 directly with correct labeling and factor levels
+colData(gsva_results_fc)$anti_ctla4 <- factor(
+        ifelse(colData(gsva_results_fc)$anti_ctla4 == TRUE, "Combination ICI", "Single ICI"),
+        levels = c("Single ICI", "Combination ICI")
+)
+
+# Convert colData to a data.frame, sort, and convert back if necessary
+col_data_df <- as.data.frame(colData(gsva_results_fc))
+col_data_df <- col_data_df %>%
+        arrange(anti_ctla4, desc(responder))
+colData(gsva_results_fc) <- DataFrame(col_data_df)
+
+# Colors and aesthetics setup
+colors <- brewer.pal(11, "RdBu")
+metadata(gsva_results_fc)$anno_colors$responder <- c("FALSE" = "#E6AB02", "TRUE" = "#66A61E")
+metadata(gsva_results_fc)$hmcols <- rev(colors)
+
+# Generate the heatmap
+sechm(
+        gsva_results_fc, 
+        features = cytokine_groups, 
+        do.scale = TRUE, 
+        top_annotation = c("responder"), 
+        gaps_at = "anti_ctla4", 
+        cluster_rows = FALSE
+)
+```
+
+# Session info
+
+```{r}
+devtools::session_info()
+```
+
+This document was processed on: `r Sys.Date()`.

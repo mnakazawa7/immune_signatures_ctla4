@@ -1,0 +1,146 @@
+---
+title: "FlowJo manual gating validation, final CIR resubmission"
+author: "Mari Nakazawa"
+date: "2025-01-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+```
+
+## Dependencies
+
+```{r}
+library(readxl)
+library(tidyverse)
+library(ggpubr)
+library(patchwork)
+library(knitr)
+```
+
+## Load clinical data
+
+```{r}
+clinical_cohort <- read_csv("../Data/patients_list_final.csv") %>% #Read in final clinical annotation file
+        left_join(read_csv("../Data/fcs_metadata.csv"), by = "patient")
+
+length(unique(clinical_cohort$patient)) #104
+```
+
+## Manually gated Th17 and Th17_TBET population
+
+```{r}
+th17_data <- read.delim("../Data/Th17.txt", header = TRUE, sep = "\t") %>% 
+        rename_with(~c("filename", "th17_count", "th17_prop_cd4", "th17_tbet_count","th17_tbet_prop_th17", "th17_tbet_prop_cd4"))
+
+kable(th17_data)
+kable(tail(th17_data, 2))
+
+clinical_th17 <- th17_data %>% 
+        left_join(clinical_cohort, by = c("filename" = "filename_clean")) %>% 
+        select(-msi_tmb_hi, -responder)
+        
+wide_data_th17 <- clinical_th17 %>% 
+        filter(!is.na(patient)) %>% 
+        select(patient, anti_ctla4, timepoint, th17_count, th17_tbet_count) %>% 
+        pivot_wider(id_cols = c("patient", "anti_ctla4"), names_from = timepoint, values_from = c("th17_count", "th17_tbet_count")) %>% 
+        rename_with(~c("patient", "anti_ctla4", "th17_baseline", "th17_tx", "th17_tbet_baseline", "th17_tbet_tx")) %>% 
+        mutate(logfc_th17 = log2(th17_tx/th17_baseline)) %>% 
+        mutate(logfc_th17_tbet = log2(th17_tbet_tx/th17_tbet_baseline)) %>% 
+        filter(!is.na(logfc_th17))
+
+th17 <- ggplot(wide_data_th17, aes(x = anti_ctla4, y = logfc_th17, color = anti_ctla4)) +
+        geom_boxplot(lwd = 1) +
+        geom_jitter() +
+        theme_classic() +
+        theme(legend.position = "none") +
+        scale_color_brewer(palette = "Dark2") +
+        scale_x_discrete(labels = c("Single ICI", "Combination ICI")) +
+        labs(x = "Regimen", y = "Log2 fold change Th17 population") +
+        stat_compare_means(method = "wilcox.test", size = 4) 
+
+th17tbet <- ggplot(wide_data_th17, aes(x = anti_ctla4, y = logfc_th17_tbet, color = anti_ctla4)) +
+        geom_boxplot(lwd = 1) +
+        geom_jitter() +
+        theme_classic() +
+        theme(legend.position = "none") +
+        scale_color_brewer(palette = "Dark2") +
+        scale_x_discrete(labels = c("Single ICI", "Combination ICI")) +
+        labs(x = "Regimen", y = "Log2 fold change Th17+TBET+ population") +
+        stat_compare_means(method = "wilcox.test", size = 4) 
+
+th17 + th17tbet
+```
+
+## Manually gated Treg population
+
+```{r}
+treg_data <- read.delim("../Data/treg.txt", header = TRUE, sep = "\t") %>% 
+        rename_with(~c("filename", "treg_count", "treg_prop_cd4"))
+
+kable(treg_data)
+kable(tail(treg_data, 2))
+
+clinical_treg <- treg_data %>% 
+        left_join(clinical_cohort, by = c("filename" = "filename_clean"))
+
+wide_data_treg <- clinical_treg %>% 
+        filter(!is.na(patient)) %>% 
+        pivot_wider(id_cols = c("patient", "anti_ctla4"), names_from = timepoint, values_from = treg_count) %>% 
+        mutate(logfc = log2(`On Treatment`/Baseline)) %>% 
+        filter(!is.na(logfc))
+
+treg <- ggplot(wide_data_treg, aes(x = anti_ctla4, y = logfc, color = anti_ctla4)) +
+        geom_boxplot(lwd = 1) +
+        geom_jitter() +
+        theme_classic() +
+        theme(legend.position = "none") +
+        scale_color_brewer(palette = "Dark2") +
+        scale_x_discrete(labels = c("Single ICI", "Combination ICI")) +
+        labs(x = "Regimen", y = "Log2 fold change Treg population") +
+        stat_compare_means(method = "wilcox.test", size = 4) 
+
+th17 + treg
+```
+
+## Manually gated Th1 population
+
+```{r}
+th_data <- read.delim("../Data/th1_th2.txt", header = TRUE, sep = "\t") %>% 
+        rename_with(~c("filename", "th1_count", "th1_prop_cd4", "th2_count", "th2_prop_cd4"))
+
+kable(th_data)
+kable(tail(th_data, 2))
+
+clinical_th <- th_data %>% 
+        left_join(clinical_cohort, by = c("filename" = "filename_clean"))
+
+wide_data_th <- clinical_th %>% 
+        filter(!is.na(patient)) %>% 
+        pivot_wider(id_cols = c("patient", "anti_ctla4"), names_from = timepoint, values_from = c("th1_count", "th2_count")) %>% 
+        rename_with(~c("patient", "anti_ctla4", "th1_bl", "th1_tx", "th2_bl", "th2_tx")) %>% 
+        mutate(logfc_th1 = log2(th1_tx/th1_bl)) %>% 
+        mutate(logfc_th2 = log2(th2_tx/th2_bl)) %>% 
+        filter(!is.na(logfc_th1))
+
+th1 <- ggplot(wide_data_th, aes(x = anti_ctla4, y = logfc_th1, color = anti_ctla4)) +
+        geom_boxplot(lwd = 1) +
+        geom_jitter() +
+        theme_classic() +
+        theme(legend.position = "none") +
+        scale_color_brewer(palette = "Dark2") +
+        scale_x_discrete(labels = c("Single ICI", "Combination ICI")) +
+        labs(x = "Regimen", y = "Log2 fold change Th1 population") +
+        stat_compare_means(method = "wilcox.test", size = 4) 
+
+th1 
+```
+
+# Session info
+
+```{r}
+devtools::session_info()
+```
+
+This document was processed on: `r Sys.Date()`.
