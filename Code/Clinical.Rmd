@@ -11,45 +11,33 @@ knitr::opts_chunk$set(echo = FALSE)
 
 ## Dependencies
 
-```{r}
+```{r, echo = F}
 library(tidyverse)
 library(RColorBrewer)
 library(table1)
 library(ggsurvfit)
-library(survival)
-library(survminer)
 library(patchwork)
-library(forestmodel)
-library(writexl)
-library(tidycmprsk)
 ```
 
 ## Clinical data
 
 ```{r, echo = FALSE}
 clinical_cohort <- read_csv("../Data/patients_list_final.csv") #Read in final clinical annotation file
-```
 
 # Factors
-
-```{r}
-#Factors
 clinical_cohort$Race <- factor(clinical_cohort$Race, levels = c("White", "Black", "Other"))
 clinical_cohort$msi_tmb_hi <- factor(clinical_cohort$msi_tmb_hi, levels = c(FALSE, TRUE), labels = c("Low/Unknown", "High"))
 clinical_cohort$treatment_summary <- factor(clinical_cohort$treatment_summary, levels = c("neither", "non-immunotherapy systemic tx", "immunotherapy systemic treatment", "both"), labels = c("Neither", "Non-immunotherapy systemic tx", "Immunotherapy", "Both"))
 clinical_cohort$anti_ctla4 <- factor(clinical_cohort$anti_ctla4, levels = c(FALSE, TRUE), labels = c("Single", "Combination"))
 clinical_cohort$responder <- factor(clinical_cohort$responder, levels = c(FALSE, TRUE), labels = c("Non-responder", "Responder"))
 
-#Labels
+# Labels
 label(clinical_cohort$msi_tmb_hi) <- "MSI-H or TMB-H"
 label(clinical_cohort$treatment_summary) <- "Prior Treatment"
 label(clinical_cohort$anti_ctla4) <- "Regimen"
 label(clinical_cohort$responder) <- "Response Status"
-```
 
-## Compute p-values for Table 1
-
-```{r p values, echo = FALSE}
+# Code to compute p-values
 pvalue <- function(x, ...) {
     # Construct vectors of data y, and groups (strata) g
     y <- unlist(x)
@@ -67,7 +55,7 @@ pvalue <- function(x, ...) {
 }
 ```
 
-## Baseline characteristics table
+## Table 1
 
 ```{r}
 table_1 <- table1(~ `Age On Study` + Gender + Race + `Cancer Type` + treatment_summary + msi_tmb_hi + responder | clinical_cohort$anti_ctla4, data = clinical_cohort, overall = "Total Cohort")
@@ -76,10 +64,15 @@ table_1.1 <- table1(~ `Age On Study` + Gender + Race + cancer_type + treatment_s
 
 table_1_comparison <- table1(~ `Age On Study` + Gender + Race + cancer_type + treatment_summary + msi_tmb_hi + responder | clinical_cohort$anti_ctla4, data = clinical_cohort, overall = FALSE, extra.col = list(`P-value` = pvalue))
 
-table_1 <- as.data.frame(table_1)
-table_1_comp <- as.data.frame(table_1_comparison)
+# Table 1
+table_1
 ```
 
+## Table 1 with p values
+
+```{r}
+table_1_comparison
+```
 
 # Session info
 

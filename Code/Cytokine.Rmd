@@ -19,7 +19,6 @@ library(RColorBrewer)
 library(patchwork)
 library(ComplexHeatmap)
 library(ggpubr)
-library(writexl)
 ```
 
 ## Load clinical data
@@ -41,17 +40,6 @@ cytokines_wide <- cytokines_clean %>%
         filter(!is.na(log_fc))
 
 length(unique(cytokines_wide$patient)) #75 paired specimens
-```
-
-## Distributions by cytokine
-
-```{r}
-#Log-transformed and scaled data by cytokine
-ggplot(cytokines_clean, aes(x = log_concentration)) +
-        geom_histogram() +
-        theme_classic() +
-        scale_y_log10() +
-        facet_wrap(~cytokine, ncol = 6)
 ```
 
 ## Boxplot, fold change
@@ -137,6 +125,15 @@ head(linear_m, 15)
 ## Extract coefficients
 
 ```{r}
+model_summary <- summary(model_results[["IP-10"]]) #Insert cytokine here
+coefficients <- model_summary$coefficients
+results_df <- as.data.frame(coefficients)
+colnames(results_df) <- c("Estimate", "Std. Error", "t value", "p value")
+results_df <- results_df[, c("Estimate", "Std. Error", "p value")]
+
+results <- linear_m %>% 
+        filter(cytokine == "IP-10")
+
 model_summary <- summary(model_results[["MIG"]]) #Insert cytokine here
 coefficients <- model_summary$coefficients
 results_df <- as.data.frame(coefficients)

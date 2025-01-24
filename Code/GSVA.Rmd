@@ -44,13 +44,6 @@ conc_matrix_imputed <- kNN(fc_conc_matrix, k = 3, imp_var = FALSE) %>%  # Adjust
         as.matrix()
 
 rownames(conc_matrix_imputed) <- rownames(fc_conc_matrix)
-
-# Check dimensions
-dim(conc_matrix_imputed)
-
-# Inspect row and column names
-head(rownames(conc_matrix_imputed))  # Should return cytokine names
-head(colnames(conc_matrix_imputed))  # Should return patient/sample names
 ```
 
 ## Cytokine sets
@@ -124,6 +117,8 @@ ttest_results <- apply(scores, 1, function(x) {
 ttest_results_df <- data.frame(
         CytokineSet = rownames(gsva_scores),
         PValue = ttest_results)
+
+ttest_results_df
 ```
 
 ## Plots

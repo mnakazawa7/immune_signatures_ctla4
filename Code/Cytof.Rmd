@@ -58,22 +58,6 @@ long_cytof <- cytof_paired %>%
         left_join(clinical_cohort) 
 ```
 
-## Distributions by cell type
-
-```{r}
-#Untransformed data by cell type (cell proportion)
-ggplot(long_cytof, aes(x = counts)) +
-        geom_histogram() +
-        theme_classic() +
-        facet_wrap(~cell_type, ncol = 6)
-
-#Log-transformed and scaled data by cell type
-ggplot(long_cytof, aes(x = log2_counts)) +
-        geom_histogram() +
-        theme_classic() +
-        facet_wrap(~cell_type, ncol = 6)
-```
-
 ## Boxplot, fold change
 
 ```{r boxplot fold change, echo = FALSE}
@@ -164,6 +148,15 @@ head(linear_m, 20)
 ## Extract coefficients
 
 ```{r}
+model_summary <- summary(model_results[["Th17"]])
+coefficients <- model_summary$coefficients
+results_df <- as.data.frame(coefficients)
+colnames(results_df) <- c("Estimate", "Std. Error", "t value", "p value")
+results_df <- results_df[, c("Estimate", "Std. Error", "p value")]
+
+results <- linear_m %>% 
+        filter(cell_type %in% c("Th17"))
+
 model_summary <- summary(model_results[["Treg"]])
 coefficients <- model_summary$coefficients
 results_df <- as.data.frame(coefficients)

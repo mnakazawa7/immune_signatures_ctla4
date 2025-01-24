@@ -14,7 +14,6 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r dependencies}
 library(tidyverse)
 library(RColorBrewer)
-library(GGally)
 library(patchwork)
 library(pheatmap)
 library(ComplexHeatmap)
@@ -171,8 +170,6 @@ set.seed(123)
 
 ht_df_single <- Heatmap(df_single_matrix, name = "LogFC marker expression", column_title = "Single ICI", top_annotation = col_anno2, right_annotation = row_anno, cluster_rows = FALSE, cluster_columns = FALSE, heatmap_legend_param = list(legend_direction = "horizontal", legend_position = "bottom"))
 
-draw(ht_df_single, heatmap_legend_side = "bottom")
-
 ht_df_combo <- Heatmap(df_combo_matrix, name = "LogFC marker expression", column_title = "Combination ICI", top_annotation = col_anno2, right_annotation = row_anno, cluster_rows = FALSE, cluster_columns = FALSE)
 
 ht_df_single + ht_df_combo 
@@ -224,15 +221,6 @@ th17_long <- markers_paired %>%
 
 model_th17 <- lmer(value ~ timepoint * anti_ctla4 * variable + (1 | patient), data = th17_long)
 summary(model_th17)
-
-# Get estimated marginal means (EMMs)
-emms_th17 <- emmeans(model_th17, ~ timepoint * anti_ctla4 | variable)
-
-# Perform pairwise comparisons of the change in immune cell marker expression by single and combination ICI therapy
-pairwise_results_th17 <- contrast(emms_th17, interaction = "pairwise", by = "variable")
-
-# View the results
-summary(pairwise_results_th17) 
 
 # Test the difference between baseline and on treatment, for single and combination ICI therapy separately
 treatment_diff_th17 <- emmeans(model_th17, ~ timepoint | anti_ctla4 * variable)
@@ -287,15 +275,6 @@ treg_long <- markers_paired %>%
 
 model_treg <- lmer(value ~ timepoint * anti_ctla4 * variable + (1 | patient), data = treg_long)
 summary(model_treg)
-
-# Get estimated marginal means (EMMs)
-emms_treg <- emmeans(model_treg, ~ timepoint * anti_ctla4 | variable)
-
-# Perform pairwise comparisons of the change in immune cell marker expression by single and combination ICI therapy
-pairwise_results_treg <- contrast(emms_treg, interaction = "pairwise", by = "variable")
-
-# View the results
-summary(pairwise_results_treg) 
 
 # Test the difference between baseline and on treatment, for single and combination ICI therapy separately
 treatment_diff_treg <- emmeans(model_treg, ~ timepoint | anti_ctla4 * variable)
